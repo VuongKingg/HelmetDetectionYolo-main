@@ -1,3 +1,71 @@
+Lệnh,Ý nghĩa
+git init: Khởi tạo một kho lưu trữ Git cục bộ (tạo file .git).
+git status: "Kiểm tra trạng thái các file (file nào đã sửa, file nào chưa được theo dõi)."
+git add .: Thêm tất cả các thay đổi vào hàng chờ (staging area) để chuẩn bị commit.
+"git commit -m ""nội dung""": Lưu lại các thay đổi vào lịch sử kèm theo một tin nhắn mô tả.
+git push origin main: Đẩy các bản lưu (commit) từ máy tính lên nhánh main trên GitHub.
+git pull origin main: Tải các thay đổi mới nhất từ GitHub về máy tính cá nhân.
+git log: Xem lại lịch sử các lần commit đã thực hiện.
+git clone <link>: Sao chép một dự án từ GitHub về máy tính của bạn.
+cd ..: Quay lại thư mục cha (thường dùng khi bạn đứng sai thư mục như các bước trước đó).
+ls: Liệt kê các file và thư mục tại vị trí hiện tại để kiểm tra cấu trúc.
+
+
+
+## Hướng dẫn đẩy dự án lên Github
+Bước 1: Cấu hình danh tính (Chỉ làm lần đầu) Nếu máy tính chưa biết bạn là ai, Git sẽ chặn lệnh commit.
+
+    git config --global user.email "email-cua-ban@example.com"
+
+    git config --global user.name "TenCuaBan"  
+
+Bước 2: Chuẩn bị file Di chuyển vào đúng thư mục dự án trong Terminal và kiểm tra file:
+
+    git add . (Dấu chấm đại diện cho tất cả các file, bao gồm cả README.md).
+
+Bước 3: Ghi nhận thay đổi
+
+    git commit -m "Mô tả ngắn gọn nội dung bạn vừa làm".
+
+Bước 4: Kết nối với GitHub (Nếu là dự án mới hoàn toàn)
+
+    git remote add origin <link-repository-cua-ban>.
+
+    git branch -M main (Đặt tên nhánh chính là main).
+
+Bước 5: Đẩy code lên
+
+    git push -u origin main.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Hướng dẫn đẩy dự án lên GitHub
 
