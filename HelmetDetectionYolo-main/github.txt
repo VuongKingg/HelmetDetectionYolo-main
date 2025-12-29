@@ -1,0 +1,112 @@
+
+# Hướng dẫn đẩy dự án lên GitHub
+
+Ngắn gọn: các bước sau sẽ giúp bạn đưa dự án local lên repo GitHub cá nhân.
+
+---
+
+Yêu cầu trước khi bắt đầu:
+- Cài `git` và cấu hình `git config --global user.name` và `user.email`.
+- (Tùy chọn) Cài `gh` CLI để tạo repo nhanh: `gh auth login`.
+- (Nếu có file weights lớn như `*.pt`) cài `git-lfs`.
+
+1) Mở terminal và chuyển tới thư mục dự án
+
+```bash
+cd "C:\Users\vuong\Documents\Xu ly anh\HelmetDetectionYolo-main\HelmetDetectionYolo-main"
+```
+
+2) Khởi tạo Git (nếu chưa có)
+
+```bash
+git status
+# Nếu chưa là repo:
+git init
+git checkout -b main
+```
+
+3) Thêm `.gitignore` và (nếu cần) Git LFS
+
+Ví dụ `.gitignore` cơ bản cho Python:
+
+```
+__pycache__/
+*.pyc
+env/
+venv/
+.idea/
+.vscode/
+results/
+runs/
+*.pt
+*.pth
+.DS_Store
+```
+
+Nếu có file lớn (weights):
+
+```bash
+git lfs install
+git lfs track "*.pt"
+# Sau đó sẽ có file .gitattributes để commit
+```
+
+4) Tạo repository trên GitHub
+
+- Trên web: github.com -> New repository -> đặt tên -> Create.
+- Hoặc dùng `gh`:
+
+```bash
+gh repo create <your-username>/<repo-name> --public --source=. --remote=origin
+```
+
+5) Thêm, commit và push
+
+```bash
+git add .gitattributes .gitignore  # nếu có
+git add .
+git commit -m "Initial commit"
+
+# Thêm remote (HTTPS)
+git remote add origin https://github.com/<your-username>/<repo-name>.git
+git push -u origin main
+```
+
+Ghi chú: nếu dùng HTTPS, khi Git yêu cầu mật khẩu, hãy dùng Personal Access Token (PAT) đã tạo trên GitHub (cấp quyền repo).
+
+Hoặc dùng SSH (nếu đã cấu hình SSH key):
+
+```bash
+git remote add origin git@github.com:<your-username>/<repo-name>.git
+git push -u origin main
+```
+
+6) Tạo README và kiểm tra trên GitHub
+
+```bash
+echo "# Project Title" > README.md
+git add README.md
+git commit -m "Add README"
+git push
+```
+
+7) Tùy chọn hữu ích
+- Thêm `LICENSE` nếu chia sẻ công khai.
+- Thêm `README.md` mô tả cách chạy và dependency.
+- Thiết lập GitHub Actions trong `.github/workflows/` nếu cần CI.
+
+Thông tin nhanh về xác thực:
+- Tạo PAT: GitHub -> Settings -> Developer settings -> Personal access tokens -> Generate new token (repo scope).
+- SSH key (Windows):
+
+```bash
+ssh-keygen -t ed25519 -C "youremail@example.com"
+# copy nội dung ~/.ssh/id_ed25519.pub lên GitHub -> Settings -> SSH and GPG keys
+```
+
+---
+
+Nếu bạn muốn, tôi có thể:
+- Tạo sẵn ` .gitignore` và `.gitattributes` cho bạn trong workspace.
+- Hướng dẫn cụ thể cách tạo PAT hoặc SSH trên Windows.
+

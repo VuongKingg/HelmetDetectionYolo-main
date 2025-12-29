@@ -1,0 +1,29 @@
+# Application Configuration
+
+model:
+  path: "app/models/best.pt"
+  conf_threshold: 0.25
+  iou_threshold: 0.7
+
+classes:
+  names:
+    - "with helmet"
+    - "without helmet"
+    - "rider"
+    - "number plate"
+  colors:
+    "with helmet": [0, 255, 128]
+    "without helmet": [255, 51, 51]
+    "rider": [51, 255, 255]
+    "number plate": [224, 102, 255]
+
+paths:
+  input_images: "input/images"
+  input_videos: "input/videos"
+  output_images: "output/images"
+  output_videos: "output/videos"
+
+video:
+  fps: 30
+  codec: "mp4v"
+
