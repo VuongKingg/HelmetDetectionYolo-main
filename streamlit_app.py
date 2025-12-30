@@ -345,7 +345,7 @@ with tab4:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>"
-    "Made with <b>AnhCBT</b> using Streamlit and YOLOv8"
+    "Made with <b>vuongngo</b> using Streamlit and YOLOv8"
     "</div>",
     unsafe_allow_html=True
 )

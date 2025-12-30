@@ -1,3 +1,25 @@
+#Hướng dẫn chạy
+
+B1: Tạo môi trường ảo
+    python -m venv venv
+    .\venv\Scripts\activate
+
+B2: Cài thư viện bắt buộc
+    pip install ultralytics streamlit opencv-python pillow
+
+B3: Chạy dự án
+    - Chạy trên Web (Streamlit)
+    streamlit run streamlit_app.py
+    - Chạy code mẫu
+    python example_usage.py
+    
+
+
+
+
+
+
+
 # Helmet Detection Application
 
 Ứng dụng phát hiện người điều khiển xe máy có/không có mũ bảo hiểm sử dụng YOLOv8.
