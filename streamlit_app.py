@@ -1,352 +1,304 @@
-"""
-Streamlit Web App for Helmet Detection
-"""
 import streamlit as st
 import cv2
-import numpy as np
-from PIL import Image
 import tempfile
+import time
+import pandas as pd
 import os
-from pathlib import Path
-import sys
-
-# Add app directory to path
-sys.path.insert(0, str(Path(__file__).parent))
-
+import numpy as np
+from datetime import datetime
 from app.detector import HelmetDetector
-from app.utils.visualizer import Visualizer
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
-# Page config
-st.set_page_config(
-    page_title="Helmet Detection System",
-    page_icon="🪖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- CẤU HÌNH HỆ THỐNG ---
+CONFIDENCE_THRESHOLD = 0.5
+EXCEL_FILE = 'report_vi_pham.xlsx'
+EVIDENCE_DIR = 'evidence_images'
 
-# Load config
-@st.cache_resource
-def load_detector():
-    """Load detector model (cached)"""
+if not os.path.exists(EVIDENCE_DIR):
+    os.makedirs(EVIDENCE_DIR)
+
+# --- CLASS THEO DÕI ĐỐI TƯỢNG (TRACKER) ---
+class Tracker:
+    def __init__(self, max_disappeared=40, max_distance=100):
+        self.nextObjectID = 0
+        self.objects = {}
+        self.disappeared = {}
+        self.max_disappeared = max_disappeared
+        self.max_distance = max_distance
+
+    def register(self, centroid):
+        self.objects[self.nextObjectID] = centroid
+        self.disappeared[self.nextObjectID] = 0
+        self.nextObjectID += 1
+        return self.nextObjectID - 1
+
+    def deregister(self, objectID):
+        del self.objects[objectID]
+        del self.disappeared[objectID]
+
+    def update(self, rects):
+        if len(rects) == 0:
+            for objectID in list(self.disappeared.keys()):
+                self.disappeared[objectID] += 1
+                if self.disappeared[objectID] > self.max_disappeared:
+                    self.deregister(objectID)
+            return self.objects
+
+        inputCentroids = np.zeros((len(rects), 2), dtype="int")
+        for (i, (startX, startY, endX, endY)) in enumerate(rects):
+            cX = int((startX + endX) / 2.0)
+            cY = int((startY + endY) / 2.0)
+            inputCentroids[i] = (cX, cY)
+
+        if len(self.objects) == 0:
+            for i in range(0, len(inputCentroids)):
+                self.register(inputCentroids[i])
+        else:
+            objectIDs = list(self.objects.keys())
+            objectCentroids = list(self.objects.values())
+
+            D = []
+            for oc in objectCentroids:
+                row = []
+                for ic in inputCentroids:
+                    dist = np.linalg.norm(np.array(oc) - np.array(ic))
+                    row.append(dist)
+                D.append(row)
+            D = np.array(D)
+
+            rows = D.min(axis=1).argsort()
+            cols = D.argmin(axis=1)[rows]
+            usedRows = set()
+            usedCols = set()
+
+            for (row, col) in zip(rows, cols):
+                if row in usedRows or col in usedCols: continue
+                if D[row, col] > self.max_distance: continue
+                objectID = objectIDs[row]
+                self.objects[objectID] = inputCentroids[col]
+                self.disappeared[objectID] = 0
+                usedRows.add(row)
+                usedCols.add(col)
+
+            unusedRows = set(range(0, D.shape[0])).difference(usedRows)
+            unusedCols = set(range(0, D.shape[1])).difference(usedCols)
+
+            for row in unusedRows:
+                objectID = objectIDs[row]
+                self.disappeared[objectID] += 1
+                if self.disappeared[objectID] > self.max_disappeared:
+                    self.deregister(objectID)
+            for col in unusedCols:
+                self.register(inputCentroids[col])
+
+        return self.objects
+
+# --- HÀM TRANG TRÍ EXCEL ---
+def format_excel_file(filename):
     try:
-        detector = HelmetDetector()
-        return detector, None
+        wb = load_workbook(filename)
+        ws = wb.active
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                             top=Side(style='thin'), bottom=Side(style='thin'))
+        
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF", size=12)
+            cell.fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = thin_border
+            
+        for col in ws.columns:
+            max_length = 0
+            column = col[0].column_letter
+            for cell in col:
+                try:
+                    cell.border = thin_border
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column].width = adjusted_width
+        wb.save(filename)
     except Exception as e:
-        return None, str(e)
+        print(f"Lỗi format excel: {e}")
 
-# Initialize detector
-detector, error = load_detector()
+# --- HÀM GHI LOG ---
+def log_violation(object_id, image_path):
+    now = datetime.now()
+    # LƯU Ý: Tên cột ở đây phải khớp với tên cột lúc gọi hiển thị
+    new_data = {
+        "ID Vi Phạm": [object_id],
+        "Thời gian": [now.strftime("%Y-%m-%d %H:%M:%S")],
+        "Loại lỗi": ["Không đội mũ bảo hiểm"],
+        "Đường dẫn ảnh": [image_path]
+    }
+    df_new = pd.DataFrame(new_data)
+    
+    if os.path.exists(EXCEL_FILE):
+        try:
+            df_old = pd.read_excel(EXCEL_FILE)
+            if object_id not in df_old['ID Vi Phạm'].values:
+                df_combined = pd.concat([df_old, df_new], ignore_index=True)
+                df_combined.to_excel(EXCEL_FILE, index=False)
+                format_excel_file(EXCEL_FILE)
+                return True
+        except:
+            # Nếu file lỗi format cũ, tạo lại mới
+            df_new.to_excel(EXCEL_FILE, index=False)
+            format_excel_file(EXCEL_FILE)
+            return True
+    else:
+        df_new.to_excel(EXCEL_FILE, index=False)
+        format_excel_file(EXCEL_FILE)
+        return True
+    return False
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 3rem;
-        font-weight: bold;
-        text-align: center;
-        color: #1f77b4;
-        margin-bottom: 2rem;
-    }
-    .stButton>button {
-        width: 100%;
-        background-color: #1f77b4;
-        color: white;
-        font-weight: bold;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Main header
-st.markdown('<h1 class="main-header">🪖 Helmet Detection System</h1>', unsafe_allow_html=True)
+# --- GIAO DIỆN CHÍNH ---
+st.set_page_config(page_title="AI Traffic Monitor", layout="wide", page_icon="📹")
+st.title("🪖 Hệ thống Giám sát Vi phạm Mũ bảo hiểm")
 st.markdown("---")
 
-# Sidebar
-with st.sidebar:
-    st.header("⚙️ Settings")
-    
-    if error:
-        st.error(f"Error loading model: {error}")
-        st.stop()
-    
-    # Model info
-    st.success("✅ Model loaded successfully!")
-    st.markdown("### Model Information")
-    st.info("**Model:** YOLOv8n\n\n**Classes:**\n- With Helmet\n- Without Helmet\n- Rider\n- Number Plate")
-    
-    # Detection settings
-    st.markdown("### Detection Settings")
-    conf_threshold = st.slider(
-        "Confidence Threshold",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.25,
-        step=0.05,
-        help="Minimum confidence for detection"
-    )
-    
-    iou_threshold = st.slider(
-        "IoU Threshold",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.7,
-        step=0.05,
-        help="IoU threshold for NMS"
-    )
-    
-    if detector:
-        detector.conf_threshold = conf_threshold
-        detector.iou_threshold = iou_threshold
-    
-    st.markdown("---")
-    st.markdown("### 📊 Model Performance")
-    st.metric("mAP50", "94%")
-    st.metric("mAP50-95", "76%")
-    st.metric("Precision", "91%")
-    st.metric("Recall", "90%")
+@st.cache_resource
+def init_detector():
+    return HelmetDetector()
 
-# Main content
-tab1, tab2, tab3, tab4 = st.tabs(["📸 Image", "🎥 Video", "📹 Webcam", "ℹ️ About"])
+try:
+    detector = init_detector()
+    tracker = Tracker(max_disappeared=40, max_distance=100)
+except Exception as e:
+    st.error(f"Lỗi khởi tạo: {e}")
+    st.stop()
 
-# Tab 1: Image Detection
-with tab1:
-    st.header("Image Detection")
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("Upload Image")
-        uploaded_file = st.file_uploader(
-            "Choose an image...",
-            type=['jpg', 'jpeg', 'png', 'bmp'],
-            help="Upload an image to detect helmets"
-        )
-        
-        if uploaded_file is not None:
-            # Display original image
-            image = Image.open(uploaded_file)
-            st.image(image, caption="Original Image", width='stretch')
-            
-            # Detection button
-            if st.button("🔍 Detect", type="primary", width='stretch'):
-                with st.spinner("Processing image..."):
-                    # Save uploaded file temporarily
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
-                        tmp_file.write(uploaded_file.getvalue())
-                        tmp_path = tmp_file.name
-                    
-                    try:
-                        # Run detection using YOLO directly
-                        yolo_results = detector.model.predict(
-                            source=tmp_path,
-                            conf=conf_threshold,
-                            iou=iou_threshold,
-                            save=False,
-                            show=False
-                        )
-                        
-                        # Get result
-                        r = yolo_results[0]
-                        result = detector._parse_results(r)
-                        
-                        # Get annotated image from YOLO (already has boxes drawn)
-                        result_image = r.plot()  # YOLO's built-in plot method
-                        result_image = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
-                        
-                        # Clean up
-                        os.unlink(tmp_path)
-                        
-                        with col2:
-                            st.subheader("Detection Results")
-                            st.image(result_image, caption="Detected Objects", width='stretch')
-                            
-                            # Statistics
-                            st.markdown("### 📊 Statistics")
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                st.metric("Total Detections", result['count'])
-                            with col_b:
-                                st.metric("Image Size", f"{image.size[0]}x{image.size[1]}")
-                            
-                            # Detection details
-                            if result['count'] > 0:
-                                st.markdown("### 🔍 Detection Details")
-                                details_data = []
-                                for i, (box, label, conf) in enumerate(zip(
-                                    result['boxes'],
-                                    result['labels'],
-                                    result['confidences']
-                                ), 1):
-                                    details_data.append({
-                                        "ID": i,
-                                        "Class": label,
-                                        "Confidence": f"{conf:.2%}",
-                                        "Box": f"[{int(box[0])}, {int(box[1])}, {int(box[2])}, {int(box[3])}]"
-                                    })
-                                st.dataframe(details_data, width='stretch', hide_index=True)
-                                
-                                # Class counts
-                                from collections import Counter
-                                class_counts = Counter(result['labels'])
-                                st.markdown("### 📈 Class Distribution")
-                                st.bar_chart(class_counts)
-                            else:
-                                st.info("No objects detected. Try adjusting the confidence threshold.")
-                    
-                    except Exception as e:
-                        st.error(f"Error processing image: {str(e)}")
-                        if os.path.exists(tmp_path):
-                            os.unlink(tmp_path)
-        else:
-            st.info("👆 Please upload an image to start detection")
+col1, col2 = st.columns([0.6, 0.4])
 
-# Tab 2: Video Detection
-with tab2:
-    st.header("Video Detection")
+with col1:
+    st.subheader("📡 Camera Giám sát")
+    source_type = st.radio("Nguồn dữ liệu:", ["Video Upload", "Webcam"], horizontal=True)
     
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("Upload Video")
-        uploaded_video = st.file_uploader(
-            "Choose a video...",
-            type=['mp4', 'avi', 'mov', 'mkv'],
-            help="Upload a video to detect helmets"
-        )
-        
-        if uploaded_video is not None:
-            # Display video info
-            st.video(uploaded_video)
-            
-            # Save video temporarily
-            with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_video.name).suffix) as tmp_file:
-                tmp_file.write(uploaded_video.getvalue())
-                tmp_video_path = tmp_file.name
-            
-            st.info(f"Video uploaded: {uploaded_video.name}")
-            
-            # Detection button
-            if st.button("🔍 Process Video", type="primary", width='stretch'):
-                with st.spinner("Processing video... This may take a while..."):
-                    try:
-                        # Create output path
-                        output_dir = Path("output/videos")
-                        output_dir.mkdir(parents=True, exist_ok=True)
-                        output_path = output_dir / f"result_{uploaded_video.name}"
-                        
-                        # Process video
-                        stats = detector.predict_video(
-                            video_path=tmp_video_path,
-                            output_path=str(output_path),
-                            show=False
-                        )
-                        
-                        with col2:
-                            st.subheader("Processing Results")
-                            st.success("✅ Video processed successfully!")
-                            
-                            # Statistics
-                            st.markdown("### 📊 Video Statistics")
-                            col_a, col_b, col_c = st.columns(3)
-                            with col_a:
-                                st.metric("Frames Processed", stats['frames'])
-                            with col_b:
-                                st.metric("Total Detections", stats['total_detections'])
-                            with col_c:
-                                st.metric("Avg/Frame", f"{stats['avg_detections_per_frame']:.2f}")
-                            
-                            # Download processed video
-                            if output_path.exists():
-                                st.markdown("### 📥 Download Processed Video")
-                                with open(output_path, 'rb') as f:
-                                    st.download_button(
-                                        label="⬇️ Download Video",
-                                        data=f.read(),
-                                        file_name=f"detected_{uploaded_video.name}",
-                                        mime="video/mp4",
-                                        width='stretch'
-                                    )
-                        
-                        # Clean up
-                        os.unlink(tmp_video_path)
-                    
-                    except Exception as e:
-                        st.error(f"Error processing video: {str(e)}")
-                        if os.path.exists(tmp_video_path):
-                            os.unlink(tmp_video_path)
-        else:
-            st.info("👆 Please upload a video to start detection")
+    cap = None
+    if source_type == "Video Upload":
+        video_file = st.file_uploader("Chọn video MP4/AVI", type=['mp4', 'avi', 'mov'])
+        if video_file:
+            tfile = tempfile.NamedTemporaryFile(delete=False)
+            tfile.write(video_file.read())
+            cap = cv2.VideoCapture(tfile.name)
+    else:
+        cap = cv2.VideoCapture(0)
 
-# Tab 3: Webcam
-with tab3:
-    st.header("Real-time Webcam Detection")
-    st.info("⚠️ Webcam detection will open a separate window. Press 'q' to quit.")
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        start_btn = st.button("▶️ Bắt đầu chạy", type="primary", use_container_width=True)
+    with col_btn2:
+        stop_btn = st.button("⏹️ Dừng hệ thống", use_container_width=True)
     
-    if st.button("🎥 Start Webcam", type="primary", width='stretch'):
-        with st.spinner("Starting webcam..."):
+    st_frame = st.empty()
+
+with col2:
+    st.subheader("📋 Nhật ký & Bằng chứng")
+    placeholder_table = st.empty()
+    
+logged_ids = set()
+
+# --- LOOP XỬ LÝ ---
+if start_btn and cap:
+    live_img_placeholder = st.empty()
+    
+    while cap.isOpened() and not stop_btn:
+        ret, frame = cap.read()
+        if not ret: break
+
+        # Detection
+        results = detector.model.predict(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+        result = results[0]
+
+        violation_rects = []
+        for box in result.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            cls = int(box.cls[0])
+            label = detector.model.names[cls]
+            
+            if label == "without helmet":
+                violation_rects.append((x1, y1, x2, y2))
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(frame, "KHONG MU", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            elif label == "with helmet":
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        # Tracking
+        objects = tracker.update(violation_rects)
+
+        for (objectID, centroid) in objects.items():
+            text = f"ID {objectID}"
+            cv2.putText(frame, text, (centroid[0], centroid[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            cv2.circle(frame, (centroid[0], centroid[1]), 4, (0, 0, 255), -1)
+
+            if objectID not in logged_ids:
+                img_name = f"violation_{objectID}_{int(time.time())}.jpg"
+                save_path = os.path.join(EVIDENCE_DIR, img_name)
+                cv2.imwrite(save_path, frame)
+                
+                if log_violation(objectID, save_path):
+                    logged_ids.add(objectID)
+                    st.toast(f"🚨 Phát hiện ID {objectID}!")
+                    live_img_placeholder.image(frame, caption=f"ID {objectID}", channels="BGR", width=300)
+
+        # Show Video
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        st_frame.image(frame_rgb, channels="RGB")
+
+        # CẬP NHẬT BẢNG LIVE (FIX LỖI DUPLICATE ID Ở ĐÂY)
+        if os.path.exists(EXCEL_FILE):
             try:
-                detector.predict_webcam(camera_id=0, show=True)
-                st.success("Webcam stopped successfully!")
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-                st.info("Make sure your webcam is connected and not being used by another application.")
+                df_display = pd.read_excel(EXCEL_FILE)
+                df_display = df_display.sort_values(by="Thời gian", ascending=False)
+                # Chỉ lấy 3 cột cần thiết để hiển thị nhanh
+                df_mini = df_display[['ID Vi Phạm', 'Thời gian', 'Loại lỗi']]
+                
+                with placeholder_table.container():
+                    st.write("🔴 Đang giám sát...")
+                    # Dùng key thời gian thực để tránh lỗi Duplicate
+                    st.dataframe(df_mini, use_container_width=True, hide_index=True, key=f"live_{time.time()}")
+            except Exception:
+                pass 
 
-# Tab 4: About
-with tab4:
-    st.header("About This Application")
-    
-    st.markdown("""
-    ### 🎯 Purpose
-    This application detects motorcycle riders with and without helmets using YOLOv8 deep learning model.
-    
-    ### 🚀 Features
-    - **Image Detection**: Upload and detect helmets in images
-    - **Video Detection**: Process videos frame by frame
-    - **Real-time Webcam**: Live detection using your webcam
-    - **Configurable Thresholds**: Adjust confidence and IoU thresholds
-    
-    ### 📊 Model Information
-    - **Architecture**: YOLOv8n (nano)
-    - **Training**: 50 epochs
-    - **Performance**:
-        - mAP50: 94%
-        - mAP50-95: 76%
-        - Precision: 91%
-        - Recall: 90%
-    
-    ### 🏷️ Detection Classes
-    1. **With Helmet** - Riders wearing helmets
-    2. **Without Helmet** - Riders not wearing helmets
-    3. **Rider** - Motorcycle riders
-    4. **Number Plate** - Vehicle license plates
-    
-    ### 🛠️ Technology Stack
-    - **Framework**: Ultralytics YOLOv8
-    - **UI**: Streamlit
-    - **Computer Vision**: OpenCV
-    - **Python**: 3.8+
-    
-    ### 📝 Usage Tips
-    1. For best results, use images with clear visibility
-    2. Adjust confidence threshold if you get too many/few detections
-    3. Video processing may take time depending on video length
-    4. Ensure good lighting when using webcam
-    
-    ### 🤝 Support
-    For issues or questions, please check the documentation or repository.
-    """)
+    cap.release()
 
-# Footer
-st.markdown("---")
-st.markdown(
-    "<div style='text-align: center; color: #666;'>"
-    "Made with <b>vuongngo</b> using Streamlit and YOLOv8"
-    "</div>",
-    unsafe_allow_html=True
-)
+# --- PHẦN XEM LẠI LỊCH SỬ (KHI DỪNG VIDEO) ---
+if os.path.exists(EXCEL_FILE):
+    st.divider()
+    st.subheader("🔍 Tra cứu lịch sử vi phạm")
+    
+    try:
+        df_review = pd.read_excel(EXCEL_FILE)
+        df_review = df_review.sort_values(by="Thời gian", ascending=False)
 
+        c1, c2 = st.columns([0.6, 0.4])
+        with c1:
+            st.info("Click vào hàng để xem ảnh:")
+            event = st.dataframe(
+                df_review,
+                column_config={
+                    "Đường dẫn ảnh": st.column_config.TextColumn("Link ảnh"),
+                },
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key="history_static"
+            )
+        
+        with c2:
+            if len(event.selection.rows) > 0:
+                idx = event.selection.rows[0]
+                img_path = df_review.iloc[idx]["Đường dẫn ảnh"]
+                v_id = df_review.iloc[idx]["ID Vi Phạm"]
+                st.warning(f"📸 Bằng chứng ID: {v_id}")
+                if os.path.exists(img_path):
+                    st.image(img_path, use_container_width=True)
+                else:
+                    st.error("Ảnh không tồn tại.")
+    except Exception as e:
+        st.error("File dữ liệu đang bị lỗi hoặc trống.")
