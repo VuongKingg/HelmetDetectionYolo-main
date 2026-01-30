@@ -204,13 +204,15 @@ logged_ids = set()
 
 # --- LOOP XỬ LÝ ---
 if start_btn and cap:
-    live_img_placeholder = st.empty()
+    # Tạo các placeholder để giữ chỗ hiển thị
+    status_text_placeholder = col2.empty() # Nơi hiển thị trạng thái "Đang ghi..."
+    live_table_placeholder = col2.empty()  # Nơi hiển thị bảng danh sách
     
     while cap.isOpened() and not stop_btn:
         ret, frame = cap.read()
         if not ret: break
 
-        # Detection
+        # 1. Detection (Giữ nguyên logic của bạn)
         results = detector.model.predict(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
         result = results[0]
 
@@ -220,49 +222,69 @@ if start_btn and cap:
             cls = int(box.cls[0])
             label = detector.model.names[cls]
             
-            if label == "without helmet":
+            # QUAN TRỌNG: Kiểm tra đúng nhãn để bắt lỗi
+            # Nếu model của bạn trả về 'No Helmet' hoặc 'without helmet' (tùy model)
+            if label in ["without helmet", "No Helmet", "no helmet"]: 
                 violation_rects.append((x1, y1, x2, y2))
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
                 cv2.putText(frame, "KHONG MU", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            elif label == "with helmet":
+            else:
+                # Vẽ màu xanh cho các trường hợp khác
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        # Tracking
+        # 2. Tracking Update
         objects = tracker.update(violation_rects)
+        
+        # Biến cờ để kiểm tra có lỗi mới trong frame này không
+        has_new_violation = False 
 
         for (objectID, centroid) in objects.items():
+            # Vẽ ID lên video
             text = f"ID {objectID}"
             cv2.putText(frame, text, (centroid[0], centroid[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             cv2.circle(frame, (centroid[0], centroid[1]), 4, (0, 0, 255), -1)
 
+            # LOGIC GHI DỮ LIỆU
             if objectID not in logged_ids:
                 img_name = f"violation_{objectID}_{int(time.time())}.jpg"
                 save_path = os.path.join(EVIDENCE_DIR, img_name)
                 cv2.imwrite(save_path, frame)
                 
+                # Gọi hàm log và kiểm tra kết quả trả về
                 if log_violation(objectID, save_path):
                     logged_ids.add(objectID)
-                    st.toast(f"🚨 Phát hiện ID {objectID}!")
-                    live_img_placeholder.image(frame, caption=f"ID {objectID}", channels="BGR", width=300)
+                    has_new_violation = True # Đánh dấu có dữ liệu mới
+                    st.toast(f"🚨 Đã ghi nhận vi phạm: ID {objectID}", icon="⚠️")
 
-        # Show Video
+        # 3. Hiển thị Video
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         st_frame.image(frame_rgb, channels="RGB")
 
-        # CẬP NHẬT BẢNG LIVE (FIX LỖI DUPLICATE ID Ở ĐÂY)
+        # 4. CẬP NHẬT BẢNG REAL-TIME (CẢI TIẾN)
+        # Chỉ đọc lại file Excel nếu có vi phạm mới hoặc mỗi 30 frame (để giảm lag)
+        # Tuy nhiên, để chắc chắn hiển thị, ta sẽ force update nếu 'has_new_violation' = True
+        
         if os.path.exists(EXCEL_FILE):
             try:
+                # Đọc dữ liệu mới nhất
                 df_display = pd.read_excel(EXCEL_FILE)
-                df_display = df_display.sort_values(by="Thời gian", ascending=False)
-                # Chỉ lấy 3 cột cần thiết để hiển thị nhanh
-                df_mini = df_display[['ID Vi Phạm', 'Thời gian', 'Loại lỗi']]
                 
-                with placeholder_table.container():
-                    st.write("🔴 Đang giám sát...")
-                    # Dùng key thời gian thực để tránh lỗi Duplicate
-                    st.dataframe(df_mini, use_container_width=True, hide_index=True, key=f"live_{time.time()}")
-            except Exception:
-                pass 
+                # Sắp xếp mới nhất lên đầu
+                df_display = df_display.sort_values(by="Thời gian", ascending=False)
+                
+                # Lấy 3 cột quan trọng nhất & 5 dòng đầu tiên
+                df_mini = df_display[['ID Vi Phạm', 'Thời gian', 'Loại lỗi']].head(5)
+                
+                # Cập nhật trạng thái
+                status_text_placeholder.markdown(f"**⚡ Trạng thái:** Đã ghi nhận **{len(df_display)}** vi phạm.")
+                
+                # Hiển thị bảng (Dùng container để vẽ đè lên cũ)
+                with live_table_placeholder.container():
+                     # Sử dụng HTML Table đơn giản để tránh lỗi Duplicate Key của Streamlit dataframe
+                     st.table(df_mini)
+
+            except Exception as e:
+                print(f"Lỗi đọc bảng: {e}")
 
     cap.release()
 
